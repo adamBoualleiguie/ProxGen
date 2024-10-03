@@ -1,0 +1,101 @@
+# this project was created inside gitlab, to gain the versioning track of gitlab
+#  the idea is that the script automates the process of vm guests creation in proxmox 
+# and adding a gitlab ci pipeline will make IT administrator create a vm by just  creating a new branch, setting required vm specs and then commit :) 
+# and all the rest it automated
+# wait some time and then ssh to your VM :) 
+
+# TBD enabling remote tfstate  to terraform to bind it with gitlab, and separate env using the workspace 
+
+stages:
+  - init
+  - plan
+  - apply
+  - destroy
+  
+# how to garde official terraform with no sh 
+image:
+  name: hashicorp/terraform:light
+  entrypoint:
+    - '/usr/bin/env'
+    - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
+variables:
+  TF_VAR_env: "default" # Default environment (can be overridden)
+
+# global workflow
+# Global pipeline rules
+# block the run of pipeline when trrigger source is branch creation 
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "branch" && $CI_COMMIT_BRANCH != "main"'
+      when: never
+    - when: always
+
+init:
+  tags:
+    - docker
+  stage: init
+  script:
+    - terraform init
+  artifacts:
+    paths:
+      - $CI_PROJECT_DIR/.terraform/ # Store the Terraform init files as an artifact
+      - $CI_PROJECT_DIR/terraform.tfstate # Optionally include the state file
+      - $CI_PROJECT_DIR/.terraform.lock.hcl
+    expire_in: never # this case is set like this untill we enable tf workspace and tfstate managed by gitlab 
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^apply:/'
+      when: always
+
+plan:
+  tags:
+    - docker
+  stage: plan
+  dependencies:
+    - init # Ensure the plan stage depends on the artifacts from the init stage
+  script:
+    - terraform plan 
+  artifacts:
+    paths:
+      - $CI_PROJECT_DIR/.terraform/ # Store the Terraform init files as an artifact
+      - $CI_PROJECT_DIR/terraform.tfstate # Optionally include the state file
+      - $CI_PROJECT_DIR/.terraform.lock.hcl
+    expire_in: never
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^apply:/'
+      when: always
+
+apply:
+  tags:
+    - docker
+  stage: apply
+  when: manual
+  needs:
+    - job: init
+      artifacts: true
+  script:
+    - terraform apply -parallelism=2 -auto-approve
+  artifacts:
+    paths:
+      - $CI_PROJECT_DIR/.terraform/ # Store the Terraform init files as an artifact
+      - $CI_PROJECT_DIR/terraform.tfstate # Optionally include the state file
+      - $CI_PROJECT_DIR/.terraform.lock.hcl
+    expire_in: 1 hour
+    when: always
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^apply:/'
+      when: manual
+
+destroy:
+  tags:
+    - docker
+  stage: destroy
+  when: manual
+  needs:
+    - job: apply
+      artifacts: true
+  script:
+    - terraform destroy -parallelism=2 -auto-approve
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^apply:/'
+      when: manual
